@@ -510,7 +510,14 @@ lpdds->Lock(NULL,
             NULL);
 
 // compute position to start scanning bits from
-cx = cx*(ddsd.dwWidth+1) + 1;
+/*
+(0, 0)
+(1, 0)
+(2, 0)
+*/
+// 因为白线的缘故、一条线一个像素点、
+// 因为图片右边总有一条白线相隔、所以cx最后要加上1、
+cx = cx*(ddsd.dwWidth + 1) + 1;
 cy = cy*(ddsd.dwHeight+1) + 1;
 
 gwidth  = ddsd.dwWidth;
