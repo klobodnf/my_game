@@ -80,7 +80,19 @@ int Unload_Bitmap_File(BITMAP_FILE_PTR bitmap);
 
 int DDraw_Fill_Surface(LPDIRECTDRAWSURFACE7 lpdds,int color);
 
-LPDIRECTDRAWSURFACE7 DDraw_Sprite_Surface(int width, int height, int mem_flags, int color_key);
+LPDIRECTDRAWSURFACE7 DDraw_Create_Surface(int width, int height, int mem_flags, int color_key);
+
+int Scan_Image_Bitmap(BITMAP_FILE_PTR bitmap,     // bitmap file to scan image data from
+                      LPDIRECTDRAWSURFACE7 lpdds, // surface to hold data
+                      int cx, int cy);             // cell to scan image from
+
+int DDraw_Draw_Surface(LPDIRECTDRAWSURFACE7 source, // source surface to draw
+                      int x, int y,                 // position to draw at
+                      int width, int height,        // size of source surface
+                      LPDIRECTDRAWSURFACE7 dest,    // surface to draw the surface on
+                      int transparent);          // transparency flag
+
+int Bmp2Surface(LPDIRECTDRAWSURFACE7 lpdds, int SurfaceWidth, int SurfaceHeight);
 
 
 // MACROS /////////////////////////////////////////////////
@@ -134,7 +146,204 @@ char buffer[80];                             // general printing buffer
 
 // FUNCTIONS ////////////////////////////////////////////////
 
-LPDIRECTDRAWSURFACE7 DDraw_Sprite_Surface(int width, int height, int mem_flags, int color_key = 0)
+
+int DDraw_Draw_Surface(LPDIRECTDRAWSURFACE7 source, // source surface to draw
+                      int x, int y,                 // position to draw at
+                      int width, int height,        // size of source surface
+                      LPDIRECTDRAWSURFACE7 dest,    // surface to draw the surface on
+                      int transparent = 1)          // transparency flag
+{
+	// draw a bob at the x,y defined in the BOB
+	// on the destination surface defined in dest
+
+	RECT dest_rect,   // the destination rectangle
+		 source_rect; // the source rectangle                             
+
+	// fill in the destination rect
+	// 目标表面、也就是需要填充的表面
+	dest_rect.left   = x;
+	dest_rect.top    = y;
+	dest_rect.right  = x+width-1;
+	dest_rect.bottom = y+height-1;
+
+	// fill in the source rect
+	// 源表面、也就是需要拷贝数据的表面、这里将拷贝的表面
+	// 由传递过来的高宽决定
+	source_rect.left    = 0;
+	source_rect.top     = 0;
+	source_rect.right   = width-1;
+	source_rect.bottom  = height-1;
+
+	// test transparency flag
+	// 设置是否为透明、要就必须设置色彩键
+	if (transparent)
+	   {
+	   // enable color key blit
+	   // blt to destination surface
+	   if (FAILED(dest->Blt(&dest_rect, source,
+						 &source_rect,(DDBLT_WAIT | DDBLT_KEYSRC),
+						 NULL)))
+			   return(0);
+
+	   } // end if
+	else
+	   {
+	   // perform blit without color key
+	   // blt to destination surface
+	   if (FAILED(dest->Blt(&dest_rect, source,
+						 &source_rect,(DDBLT_WAIT),
+						 NULL)))
+			   return(0);
+
+	   } // end if
+
+	// return success
+	return(1);
+
+} // end DDraw_Draw_Surface
+
+
+int Bmp2Surface(LPDIRECTDRAWSURFACE7 lpdds, int SurfaceWidth, int SurfaceHeight)
+{
+	// copy the bitmap image to the lpddsback buffer line by line
+	// notice the 24 to 32 bit conversion pixel by pixel
+
+	// 一个像素一个像素的逐粒拷贝至表面
+
+	// lock the lpddsback surface
+	lpdds->Lock(NULL,&ddsd, DDLOCK_SURFACEMEMORYPTR | DDLOCK_WAIT,NULL);
+
+	// get video pointer to primary surfce
+	DWORD *back_buffer = (DWORD *)ddsd.lpSurface;       
+
+	// process each line and copy it into the lpddsback buffer
+	if (ddsd.lPitch == SurfaceWidth)
+	{
+	   // copy memory from double buffer to lpddsback buffer
+	   memcpy((void *)back_buffer, (void *)bitmap.buffer, SurfaceWidth*SurfaceHeight);
+	}
+	else
+	{
+
+
+		
+		for (int index_y = 0; index_y < SurfaceHeight; index_y++)
+		{
+			for (int index_x = 0; index_x < SurfaceWidth; index_x++)
+			{
+				// get BGR values
+				UCHAR blue  = (bitmap.buffer[index_y*SurfaceWidth*3 + index_x*3 + 0]),
+					  green = (bitmap.buffer[index_y*SurfaceWidth*3 + index_x*3 + 1]),
+					  red   = (bitmap.buffer[index_y*SurfaceWidth*3 + index_x*3 + 2]);
+
+				// this builds a 32 bit color value in A.8.8.8 format (8-bit alpha mode)
+				DWORD pixel = _RGB32BIT(0,red,green,blue);
+
+				// write the pixel
+				back_buffer[index_x + (index_y*ddsd.lPitch >> 2)] = pixel;
+
+			} // end for index_x
+
+		} // end for index_y
+
+		
+		
+	}
+
+	// now unlock the lpddsback surface
+	if (FAILED(lpdds->Unlock(NULL)))
+	   return(0);
+}  // end Bmp2Surface
+
+
+int Scan_Image_Bitmap(BITMAP_FILE_PTR bitmap,     // bitmap file to scan image data from
+                      LPDIRECTDRAWSURFACE7 lpdds, // surface to hold data
+                      int cx, int cy)             // cell to scan image from
+{
+// this function extracts a bitmap out of a bitmap file
+
+UCHAR *source_ptr,   // working pointers
+      *dest_ptr;
+
+DDSURFACEDESC2 ddsd;  //  direct draw surface description 
+
+// get the addr to destination surface memory
+
+// set size of the structure
+ddsd.dwSize = sizeof(ddsd);
+
+lpdds->Lock(NULL,&ddsd, DDLOCK_SURFACEMEMORYPTR | DDLOCK_WAIT,NULL);
+
+// compute position to start scanning bits from
+/*
+(0, 0)  =》 cx=1, cy=1
+(1, 0)  =>  cx=dwWidth+2, cy=1
+(2, 0)  =>  cx=2dwWeight + 3, cy = 1
+*/
+// 因为白线的缘故、一条线一个像素点、
+// cx负责人物动画帧的起点x坐标、因为人物的左右总有两条白线
+// cy负责人物动画帧的起点的y坐标、因为人物的顶头总有一条白色的线
+// 所以总是从第二行开始、因为这里传入的cy恒为0、所以cy恒为1
+cx = cx*(ddsd.dwWidth + 1) + 1;
+cy = cy*(ddsd.dwHeight+1) + 1;
+
+
+//gwidth  = ddsd.dwWidth;
+//gheight = ddsd.dwHeight;
+
+
+// dwWidth和dwHeight分别是指人物表面的高宽
+// 而biWidth和biHeight分别是指人物动画帧位图的高宽
+// extract bitmap data
+// 为什么要加上biWidth呢、原因是要从第二行才开始录入动画帧表面、因为
+// 图片的上方有一条一像素的白色、所以这就是总是要从第二行开始的原因了
+// 为什么要加上1呢、因为最左边有一条白线、所以总是要加上1、过滤过它
+// ptr => buffer + biWidth + 1
+// ptr => buffer + biWidth + dwWidth + 2
+// ptr => buffer + biWidth + 2dwWidth + 3
+
+int ptr_offset = cy*bitmap->bitmapinfoheader.biWidth+cx;
+
+source_ptr = bitmap->buffer + ptr_offset;
+
+
+
+
+// assign a pointer to the memory surface for manipulation
+dest_ptr = (UCHAR *)ddsd.lpSurface;
+
+// iterate thru each scanline and copy bitmap
+// 一行一行的把位图相应的动画帧拷贝到帧表面上
+for (int index_y=0; index_y < ddsd.dwHeight; index_y++)
+    {
+    // copy next line of data to destination
+	// 这个狠好理解、前面确定好要拷贝哪帧的位置后、便从这个source_ptr这个位置点、
+	// 拷贝dwWidth个字节的位置
+    memcpy(dest_ptr, source_ptr, ddsd.dwWidth);
+
+    // advance pointers
+	// 在这里、由于动画帧表面是自己创建的、所以其实lPitch就是dwWidth人物表面的宽度而已
+	// 这里写lPitch主要也是为了安全而已
+
+	// 虽然内容是已经拷贝到相应位置了、但莪们还是要为下一行的拷贝做准备、因为指针还未移动呢！
+	// 
+	// 动画帧表面、在拷贝下一行之前移动一整行、刚好就是动画帧的宽、这个比较好理解
+	// 虽然位图表面要拷贝的不是一整行、而是其中的dwWidth个像素而已、但也依然要移动位图宽度个字节
+	// 想想、把(x, y)移动到(x, y+1)刚好不就是当前行的下一行么、所以刚好也就是相差biWidth个位置
+    dest_ptr   += (ddsd.lPitch); // (ddsd.dwWidth);
+    source_ptr += bitmap->bitmapinfoheader.biWidth;
+    } // end for index_y
+
+// unlock the surface 
+lpdds->Unlock(NULL);
+
+// return success
+return(1);
+
+} // end Scan_Image_Bitmap
+
+
+LPDIRECTDRAWSURFACE7 DDraw_Create_Surface(int width, int height, int mem_flags, int color_key = 0)
 {
 // this function creates an offscreen plain surface
 
@@ -175,7 +384,7 @@ return(lpdds);
 
 // return surface
 return(lpdds);
-} // end DDraw_Sprite_Surface
+} // end DDraw_Create_Surface
 
 
 int DDraw_Fill_Surface(LPDIRECTDRAWSURFACE7 lpdds,int color)
@@ -427,6 +636,15 @@ int Game_Main(void *parms = NULL, int num_parms = 0)
 // this is the main loop of the game, do all your processing
 // here
 
+// lookup for proper walking sequence
+// 动画帧、先播放站立动作、然后是摆左手、然后再恢复站立动作、然后是摆右手
+// 如此重复播放
+// 声明为静态、所以不会随着Game_Main的调用而重复初始化
+static int animation_seq[4] = {0,1,0,2};
+
+int index; // general looping variable
+
+
 // make sure this isn't executed again
 if (window_closed)
    return(0);
@@ -441,7 +659,65 @@ if (KEYDOWN(VK_ESCAPE))
 
 DDRAW_INIT_STRUCT(ddbltfx);
 
-if(lpddsback->Blt(NULL, lpddsback, NULL, DDBLT_WAIT, &ddbltfx)) return 0;
+if(lpddsback->Blt(NULL, lpddsbackground, NULL, DDBLT_WAIT, &ddbltfx)) return 0;
+
+
+// move objects around
+// 这里是移动异形
+for (index=0; index < 3; index++)
+{
+// move each object to the right at its given velocity
+// 移动异形向右走
+aliens[index].x++; // =aliens[index].velocity;
+
+// 测试异形的位置是否已经到达了右边界已经完全看不着了
+// 就把它又扔会左边从头走过来
+// 因为x是左上角的坐标、所以x超过了屏幕宽度刚好完全看不见
+// 而因为异形图片的人物宽度刚好为80、所以重置到左边时设置为-80
+// test if off screen edge, and wrap around
+if (aliens[index].x > SCREEN_WIDTH)
+   aliens[index].x = - 80;
+
+// animate bot
+if (++aliens[index].counter >= (8 - aliens[index].velocity))
+    {
+    // reset counter
+    aliens[index].counter = 0;
+
+    // advance to next frame
+	// 如果超过第三帧、则重置为第0帧、这里是由前面的结构所决定的、只有三个动作
+	// 由于采用了先自增再比较的办法、所以条件这里current_frame的范围恒为1~4
+	// 所谓的第零帧、也就是标准的站立动作、可以从位图图片得知、
+    if (++aliens[index].current_frame > 3)
+       aliens[index].current_frame = 0;
+
+    } // end if
+
+} // end for index
+
+
+// draw all the bots
+for (index=0; index < 3; index++)
+{
+/*
+原型
+int DDraw_Draw_Surface(LPDIRECTDRAWSURFACE7 source, // source surface to draw
+					  int x, int y,                 // position to draw at
+					  int width, int height,        // size of source surface
+					  LPDIRECTDRAWSURFACE7 dest,    // surface to draw the surface on
+					  int transparent = 1)          // transparency flag
+*/
+// draw objects
+// 把相应的三个异形的每帧动作拷贝进缓冲表面中
+// 其中animation_seq[aliens[index].current_frame]决定了产生哪些动作帧
+// 在Game_Main函数就已经有定义了static int animation_seq[4] = {0,1,0,2};
+// 这里current_frame的范围就是0~3
+DDraw_Draw_Surface(aliens[index].frames[animation_seq[aliens[index].current_frame]], 
+                   aliens[index].x, aliens[index].y,
+                   72,80,
+                   lpddsback);
+
+} // end for index
 
 
 while(FAILED(lpddsprimary->Flip(NULL, DDFLIP_WAIT)));
@@ -518,79 +794,53 @@ char* bmp_alley24 = "alley8_24bit.bmp";
 
 
 
-
-if (!Load_Bitmap_File(&bitmap, bmp_alley24))
+// 载入背景图片
+if (!Load_Bitmap_File(&bitmap, bmp_ni24))
    return(0);
 
 
-
-// copy the bitmap image to the primary buffer line by line
-// notice the 24 to 32 bit conversion pixel by pixel
-
-// lock the primary surface
-lpddsback->Lock(NULL,&ddsd, DDLOCK_SURFACEMEMORYPTR | DDLOCK_WAIT,NULL);
-
-// get video pointer to primary surfce
-DWORD *back_buffer = (DWORD *)ddsd.lpSurface;       
-
-// process each line and copy it into the primary buffer
-if (ddsd.lPitch == SCREEN_WIDTH)
-{
-   // copy memory from double buffer to primary buffer
-   memcpy((void *)back_buffer, (void *)bitmap.buffer, SCREEN_WIDTH*SCREEN_HEIGHT);
-}
-else
-{
+// 创建背景表面、但实际上不是直接用背景表面来显示的、而是拷贝去缓冲表面和人物动作混合
+// 后才一次性打到显示表面
+// 这里头两个参数是指在屏幕的高和宽、第二个是指表面建立的地点、0指在显存建立、其它表示在
+// 系统内存建立、当然速度自然是在显存建立快了、最后一个参数是是否设置为色彩键、这里设定为-1
+// 也就是不设定任何色彩过滤、因为这个是背景表面、所以不需要任何透明的色彩键
+lpddsbackground = DDraw_Create_Surface(640,480,0,-1);
 
 
-	
-	for (int index_y = 0; index_y < SCREEN_HEIGHT; index_y++)
-	{
-		for (int index_x = 0; index_x < SCREEN_WIDTH; index_x++)
-		{
-			// get BGR values
-			UCHAR blue  = (bitmap.buffer[index_y*SCREEN_WIDTH*3 + index_x*3 + 0]),
-				  green = (bitmap.buffer[index_y*SCREEN_WIDTH*3 + index_x*3 + 1]),
-				  red   = (bitmap.buffer[index_y*SCREEN_WIDTH*3 + index_x*3 + 2]);
-
-			// this builds a 32 bit color value in A.8.8.8 format (8-bit alpha mode)
-			DWORD pixel = _RGB32BIT(0,red,green,blue);
-
-			// write the pixel
-			back_buffer[index_x + (index_y*ddsd.lPitch >> 2)] = pixel;
-
-		} // end for index_x
-
-	} // end for index_y
-
-	
-	
-}
+// 把bmp的内容拷贝至缓冲表面中
+Bmp2Surface(lpddsbackground, SCREEN_WIDTH, SCREEN_HEIGHT);
 
 
 
 
 
-// now unlock the primary surface
-if (FAILED(lpddsback->Unlock(NULL)))
+
+
+
+
+
+
+
+// 从现在开始创建人物动作了
+if (!Load_Bitmap_File(&bitmap, "Dedsp0_24bit.bmp"))
    return(0);
+
 
 // seed random number generator
 // GetTickCount是一个系统启动至今的毫秒数、
 // 配合srandg来产生一个随机数
-
 srand(GetTickCount());
 
 // initialize all the aliens
 
 // alien on level 1 of complex
 
-/*
-系统在调用rand（）之前都会自动调用srand（），如果用户在rand（）之前曾调用过srand（）给参数seed指定了一个值，
-那么rand（）就会将seed的值作为产生伪随机数的初始值；
-而如果用户在rand（）前没有调用过srand（），那么rand（）就会自动调用srand（1），即系统默认将1作为伪随机数的初始值。
-所以前面要调用一次srand来确保以下调用rand()的值会产生不同
-*/
+//
+//系统在调用rand（）之前都会自动调用srand（），如果用户在rand（）之前曾调用过srand（）给参数seed指定了一个值，
+//那么rand（）就会将seed的值作为产生伪随机数的初始值；
+//而如果用户在rand（）前没有调用过srand（），那么rand（）就会自动调用srand（1），即系统默认将1作为伪随机数的初始值。
+//所以前面要调用一次srand来确保以下调用rand()的值会产生不同
+//
 aliens[0].x              = rand()%SCREEN_WIDTH;
 aliens[0].y              = 116 - 72;                  
 aliens[0].velocity       = 2+rand()%4;
@@ -615,18 +865,44 @@ aliens[2].counter        = 0;
 
 
 
+
+// now load the bitmap containing the alien imagery
+// then scan the images out into the surfaces of alien[0]
+// and copy then into the other two, be careful of reference counts!
+
+// 现在开始载入人物的动画帧图片了
 if (!Load_Bitmap_File(&bitmap,"Dedsp0_24bit.bmp"))
    return(0);
 
-// 创建背景
-lpddsbackground = DDraw_Sprite_Surface(640,480,0,-1);
 
-// lock the surface
-lpddsbackground->Lock(NULL,&ddsd, DDLOCK_SURFACEMEMORYPTR | DDLOCK_WAIT,NULL);
+// create each surface and load bits
+// 初始化异形0号的三个动作帧表面、
+// 其实、所有的异形动作帧表面都一样的、所以没有必要为每个异形都创建相应的动作帧、
+// 所以其它异形的动作帧都指向这个异形0号的动作帧就可以了
+for (int index = 0; index < 3; index++)
+    {
+    // create surface to hold image
+    aliens[0].frames[index] = DDraw_Create_Surface(72,80,0);
 
-// now unlock the primary surface
-if (FAILED(lpddsbackground->Unlock(NULL)))
-   return(0);
+    // now load bits...
+    Scan_Image_Bitmap(&bitmap,                 // bitmap file to scan image data from
+                      aliens[0].frames[index], // surface to hold data
+                      index, 0);               // cell to scan image from    
+
+    } // end for index
+
+// unload the bitmap file, we no longer need it
+Unload_Bitmap_File(&bitmap);
+
+
+// now for the tricky part. There is no need to create more surfaces with the same
+// data, so I'm going to copy the surface pointers member for member to each alien
+// however, be careful, since the reference counts do NOT go up, you still only need
+// to release() each surface once!
+
+for (index = 0; index < 3; index++)
+    aliens[1].frames[index] = aliens[2].frames[index] = aliens[0].frames[index];
+
 
 // return success or failure or your own return code here
 return(1);
@@ -647,6 +923,22 @@ if (lpddpal)
    lpddpal->Release();
    lpddpal = NULL;
    } // end if
+
+
+// now the lpddsbackground surface
+if (lpddsbackground)
+   {
+   lpddsbackground->Release();
+   lpddsbackground = NULL;
+   } // end if
+
+// now the lpddsback surface
+if (lpddsback)
+   {
+   lpddsback->Release();
+   lpddsback = NULL;
+   } // end if
+
 
 // now the primary surface
 if (lpddsprimary)
